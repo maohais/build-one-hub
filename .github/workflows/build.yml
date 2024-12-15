@@ -22,7 +22,7 @@ jobs:
 
     - name: Build for different platforms
       run: |
-        for os in windows linux freebsd; do
+        for os in linux freebsd; do
           for arch in 386 amd64 arm arm64; do
             echo "Building for $os-$arch"
             GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch" github.com/MartialBE/one-api
