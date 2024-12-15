@@ -37,8 +37,8 @@ jobs:
           - os: macos-latest
             arch: x64
             artifact_name: one-hub-darwin-amd64.tar.gz
-          - os: ubuntu-latest # FreeBSD构建也使用ubuntu runner
-            arch: x64       # FreeBSD通常使用amd64
+          - os: ubuntu-latest
+            arch: x64
             target_os: freebsd
             artifact_name: one-hub-freebsd-amd64.tar.gz
 
@@ -47,8 +47,8 @@ jobs:
         uses: actions/checkout@v3
         with:
           repository: MartialBE/one-hub
-          ref: main # 或指定分支/标签
-          fetch-depth: 0
+          ref: main # 或者你想要checkout的分支/tag
+          fetch-depth: 0 # 获取所有提交记录，用于比较tag
 
       - name: Get Latest Tag
         id: get_latest_tag
@@ -56,10 +56,11 @@ jobs:
           latest_tag=$(git describe --tags --abbrev=0 || echo "0")
           echo "::set-output name=tag::$latest_tag"
 
-      - name: Checkout maohais/build-one-hub
+      - name: Checkout maohais/build-one-hub (用于获取之前的tag)
         uses: actions/checkout@v3
         with:
-          path: build-repo
+          path: build-repo # checkout到build-repo文件夹
+          fetch-depth: 0
 
       - name: Get Previous Release Tag
         id: get_previous_tag
@@ -67,54 +68,49 @@ jobs:
           cd build-repo
           previous_tag=$(git describe --tags --abbrev=0 || echo "0")
           echo "::set-output name=tag::$previous_tag"
-          cd ..
+          cd .. # 切回workflow根目录
 
       - name: Check if build is needed
-        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
-        run: echo "Need to build" || exit 1
+        id: check_build
+        run: |
+          if [[ "${{ steps.get_latest_tag.outputs.tag }}" != "${{ steps.get_previous_tag.outputs.tag }}" ]]; then
+            echo "::set-output name=needed::true"
+          else
+            echo "::set-output name=needed::false"
+          fi
 
-      - name: Set up build environment
-        if: matrix.os == 'ubuntu-latest' and matrix.target_os != 'freebsd'
+      - name: Set up build environment (Linux/macOS)
+        if: matrix.os != 'windows-latest' && matrix.target_os != 'freebsd' && steps.check_build.outputs.needed == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
 
       - name: Build (FreeBSD)
-        if: matrix.target_os == 'freebsd'
+        if: matrix.target_os == 'freebsd' && steps.check_build.outputs.needed == 'true'
         run: |
-          docker run --rm -v "$(pwd):/app" freebsd:latest sh -c "pkg update -f && pkg install -y make gcc tar gzip && cd /app && make" #注意pkg源速度
+          docker run --rm -v "$(pwd):/app" freebsd:latest sh -c "pkg update -f && pkg install -y make gcc tar gzip && cd /app && make"
 
       - name: Build (Other OS)
-        if: matrix.target_os != 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        if: matrix.os != 'windows-latest' && matrix.target_os != 'freebsd' && steps.check_build.outputs.needed == 'true'
         shell: bash
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            echo "windows build is not supported yet" # 待实现
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            make
-          else
-            make
-          fi
+           make # 假设使用make构建
+           # 如果需要根据不同系统执行不同的构建命令，请在此处添加判断
+           #例如 if [[ "${{ matrix.os }}" == "macos-latest" ]]; then 具体macos的命令; fi
 
       - name: Create Release Artifact (FreeBSD)
-        if: matrix.target_os == 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        if: matrix.target_os == 'freebsd' && steps.check_build.outputs.needed == 'true'
         run: |
           tar czf ${{ matrix.artifact_name }} one-api
 
       - name: Create Release Artifact (Other OS)
-        if: matrix.target_os != 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        if: matrix.os != 'windows-latest' && matrix.target_os != 'freebsd' && steps.check_build.outputs.needed == 'true'
         run: |
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            echo "windows build is not supported yet" # 待实现
-          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-              tar czf ${{ matrix.artifact_name }} one-api
-          else
-            tar czf ${{ matrix.artifact_name }} one-api
-          fi
+            tar czf ${{ matrix.artifact_name }} one-api #假设所有非freebsd平台打包方式相同，不同请修改
 
       - name: Create Release
         uses: actions/create-release@v1
-        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        if: steps.check_build.outputs.needed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -125,7 +121,7 @@ jobs:
 
       - name: Upload Release Artifact
         uses: actions/upload-release-asset@v1
-        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        if: steps.check_build.outputs.needed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
