@@ -2,7 +2,7 @@ name: Daily Build and Deploy
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天午夜（UTC时间）执行
+    - cron: '0 0 * * *' # 每天午夜 (UTC 时间) 执行
   workflow_dispatch:
 
 jobs:
@@ -21,65 +21,47 @@ jobs:
             arch: arm64
 
     steps:
-      - name: Get latest versions
-        id: get_versions
+      - name: Get latest release
+        id: latest_release
+        uses: marvinpinto/action-automatic-releases@v1.2.1 # 推荐使用固定版本号，避免意外更改
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest" # 或者使用其他策略，如根据 package.json 或 Git tags
+          prerelease: false # 是否包含预发布版本，根据你的需求设置
+          title: "Release ${{ steps.latest_release.outputs.release_version }}" # 设置 Release 标题
+          files: | # 设置需要包含在 Release 中的文件，这里先留空，稍后添加
+      - name: Output Release Version
+        if: steps.latest_release.outcome == 'success' # 只有在获取 Release 成功时才执行后续步骤
         run: |
-          # 获取 one-api 的最新 tag
-          one_api_tags=$(curl -s "https://api.github.com/repos/MartialBE/one-api/tags")
-          one_api_version=$(echo "$one_api_tags" | jq -r '.[0].name')
-          if [ -z "$one_api_version" ]; then
-              echo "Failed to get one-api version or no tag found."
-              one_api_version="0.0.0"
-          fi
-
-          # 获取当前仓库的最新 tag
-          current_tags=$(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/tags")
-          current_version=$(echo "$current_tags" | jq -r '.[0].name')
-          if [ -z "$current_version" ]; then
-              echo "Failed to get current version or no tag found."
-              current_version="0.0.0"
-          fi
-
-          echo "Latest one-api version: $one_api_version"
-          echo "Latest current repository version: $current_version"
-
-          should_build=$(if [[ "$one_api_version" != "$current_version" ]]; then echo true; else echo false; fi)
-          echo "Should build: $should_build"
-
-          echo "::set-output name=one_api_version::$one_api_version"
-          echo "::set-output name=current_version::$current_version"
-          echo "::set-output name=should_build::$should_build"
+            if [ -z "${{ steps.latest_release.outputs.release_version }}" ]; then
+              echo "No Release found."
+              exit 0
+            fi
+            echo "Release Version: ${{ steps.latest_release.outputs.release_version }}"
+            echo "::set-output name=release_version::${{ steps.latest_release.outputs.release_version }}"
 
       - name: Set up Go
-        if: ${{ steps.get_versions.outputs.should_build == 'true' }}
-        uses: actions/setup-go@v4 # 升级到 v4，使用更快的缓存机制
+        if: steps.latest_release.outcome == 'success'
+        uses: actions/setup-go@v4
         with:
-          go-version-file: 'go.mod' # 可选，指定 go.mod 文件
+          go-version-file: 'go.mod'
 
       - name: Build
-        if: ${{ steps.get_versions.outputs.should_build == 'true' }}
+        if: steps.latest_release.outcome == 'success'
         run: |
-          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o "one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_versions.outputs.one_api_version }}" github.com/MartialBE/one-api
-
-      - name: Create GitHub Release
-        if: ${{ steps.get_versions.outputs.should_build == 'true' }}
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get_versions.outputs.one_api_version }}
-          release_name: Release ${{ steps.get_versions.outputs.one_api_version }}
-          body: |
-            Release notes for ${{ steps.get_versions.outputs.one_api_version }}
+          if [ -z "${{ steps.latest_release.outputs.release_version }}" ]; then
+            echo "No version to build, skip."
+            exit 0
+          fi
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -o "one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.latest_release.outputs.release_version }}" github.com/MartialBE/one-api
 
       - name: Upload Release Asset
-        if: ${{ steps.get_versions.outputs.should_build == 'true' }}
+        if: steps.latest_release.outcome == 'success'
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_versions.outputs.one_api_version }}
-          asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_versions.outputs.one_api_version }}
+          upload_url: ${{ steps.latest_release.outputs.upload_url }}
+          asset_path: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.latest_release.outputs.release_version }}
+          asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.latest_release.outputs.release_version }}
           asset_content_type: application/octet-stream
