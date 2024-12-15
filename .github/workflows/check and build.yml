@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         os: [linux, windows, freebsd]
-        arch: [amd64, 386, arm64] # 添加 arm64
+        arch: [amd64, 386, arm64]
         exclude:
           - os: windows
             arch: arm64
@@ -19,29 +19,42 @@ jobs:
             arch: 386
           - os: freebsd
             arch: arm64
+
     steps:
       - name: Get latest versions
         id: get_versions
         run: |
-          one_api_version=$(curl -sSL -o /dev/null -w "%{http_code}" "https://api.github.com/repos/MartialBE/one-api/releases/latest" | grep 200 && echo $(curl -s "https://api.github.com/repos/MartialBE/one-api/releases/latest" | jq -r '.tag_name')) || echo "Failed to get one-api version"
-          current_version=$(curl -sSL -o /dev/null -w "%{http_code}" "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" | grep 200 && echo $(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" | jq -r '.tag_name')) || echo "Failed to get current version"
+          # 获取 one-api 的最新 tag
+          one_api_tags=$(curl -s "https://api.github.com/repos/MartialBE/one-api/tags")
+          one_api_version=$(echo "$one_api_tags" | jq -r '.[0].name')
+          if [ -z "$one_api_version" ]; then
+              echo "Failed to get one-api version or no tag found."
+              one_api_version="0.0.0"
+          fi
+
+          # 获取当前仓库的最新 tag
+          current_tags=$(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/tags")
+          current_version=$(echo "$current_tags" | jq -r '.[0].name')
+          if [ -z "$current_version" ]; then
+              echo "Failed to get current version or no tag found."
+              current_version="0.0.0"
+          fi
+
           echo "Latest one-api version: $one_api_version"
           echo "Latest current repository version: $current_version"
-          if [ "$one_api_version" != "" ] && [ "$current_version" != "" ]; then
-            should_build=$(if [[ "$one_api_version" != "$current_version" ]]; then echo true; else echo false; fi)
-            echo "Should build: $should_build"
-            echo "::set-output name=one_api_version::$one_api_version"
-            echo "::set-output name=current_version::$current_version"
-            echo "::set-output name=should_build::$should_build"
-          else
-            exit 1
-          fi
+
+          should_build=$(if [[ "$one_api_version" != "$current_version" ]]; then echo true; else echo false; fi)
+          echo "Should build: $should_build"
+
+          echo "::set-output name=one_api_version::$one_api_version"
+          echo "::set-output name=current_version::$current_version"
+          echo "::set-output name=should_build::$should_build"
 
       - name: Set up Go
         if: ${{ steps.get_versions.outputs.should_build == 'true' }}
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v4 # 升级到 v4，使用更快的缓存机制
         with:
-          go-version: '^1.15'
+          go-version-file: 'go.mod' # 可选，指定 go.mod 文件
 
       - name: Build
         if: ${{ steps.get_versions.outputs.should_build == 'true' }}
@@ -53,7 +66,7 @@ jobs:
         id: create_release
         uses: actions/create-release@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub Actions 提供的 token
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.get_versions.outputs.one_api_version }}
           release_name: Release ${{ steps.get_versions.outputs.one_api_version }}
@@ -64,7 +77,7 @@ jobs:
         if: ${{ steps.get_versions.outputs.should_build == 'true' }}
         uses: actions/upload-release-asset@v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # 使用 GitHub Actions 提供的 token
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_versions.outputs.one_api_version }}
