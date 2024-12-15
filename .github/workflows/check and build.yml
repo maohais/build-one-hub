@@ -9,24 +9,38 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-    - name: Get latest version number from one-api repository using GitHub API
-      id: get_one_api_version
-      run: |
-        version=$(curl -s "https://api.github.com/repos/MartialBE/one-api/releases/latest" | jq -r '.tag_name')
-        echo "Latest version of one-api is $version"
-        echo "::set-output name=version::$version"
+    - name: Get tags from one-api repository
+      id: get_tags_one_api
+      uses: MightyCode/gh-action-get-tags@v2.0
+      with:
+        repository: 'MartialBE/one-api'
 
-    - name: Get latest version number from current repository using GitHub API
-      id: get_current_version
+    - name: Get the latest tag from one-api
+      id: get_latest_tag_one_api
       run: |
-        version=$(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" | jq -r '.tag_name')
-        echo "Latest version of current repository is $version"
-        echo "::set-output name=version::$version"
+        echo "Tags from one-api: ${{ steps.get_tags_one_api.outputs.tags }}"
+        latest_tag=$(echo "${{ steps.get_tags_one_api.outputs.tags }}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
+        echo "Latest tag from one-api is $latest_tag"
+        echo "::set-output name=version::$latest_tag"
+
+    - name: Get tags from current repository
+      id: get_tags_current
+      uses: MightyCode/gh-action-get-tags@v2.0
+      with:
+        repository: ${{ github.repository }}
+
+    - name: Get the latest tag from current repository
+      id: get_latest_tag_current
+      run: |
+        echo "Tags from current repository: ${{ steps.get_tags_current.outputs.tags }}"
+        latest_tag=$(echo "${{ steps.get_tags_current.outputs.tags }}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
+        echo "Latest tag from current repository is $latest_tag"
+        echo "::set-output name=version::$latest_tag"
 
     - name: Compare versions
       id: compare_versions
       run: |
-        if [ "${{ steps.get_one_api_version.outputs.version }}" != "${{ steps.get_current_version.outputs.version }}" ]; then
+        if [ "${{ steps.get_latest_tag_one_api.outputs.version }}" != "${{ steps.get_latest_tag_current.outputs.version }}" ]; then
           echo "Version numbers are different."
           echo "::set-output name=should_build::true"
         else
@@ -46,7 +60,7 @@ jobs:
         for os in windows linux freebsd; do
           for arch in 386 amd64 arm arm64; do
             echo "Building for $os-$arch"
-            GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch-${{ steps.get_one_api_version.outputs.version }}" github.com/MartialBE/one-api
+            GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch-${{ steps.get_latest_tag_one_api.outputs.version }}" github.com/MartialBE/one-api
           done
         done
 
@@ -56,10 +70,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.get_one_api_version.outputs.version }}
-        release_name: Release ${{ steps.get_one_api_version.outputs.version }}
+        tag_name: ${{ steps.get_latest_tag_one_api.outputs.version }}
+        release_name: Release ${{ steps.get_latest_tag_one_api.outputs.version }}
         body: |
-          Release notes for ${{ steps.get_one_api_version.outputs.version }}
+          Release notes for ${{ steps.get_latest_tag_one_api.outputs.version }}
         draft: false
         prerelease: false
 
@@ -70,6 +84,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: one-api-*-${{ steps.get_one_api_version.outputs.version }}
-        asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_one_api_version.outputs.version }}
+        asset_path: one-api-*-${{ steps.get_latest_tag_one_api.outputs.version }}
+        asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_latest_tag_one_api.outputs.version }}
         asset_content_type: application/octet-stream
