@@ -1,0 +1,87 @@
+name: Daily Build and Deploy
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天午夜（UTC时间）执行
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout one-api repository
+      uses: actions/checkout@v2
+      with:
+        repository: 'MartialBE/one-api'
+        path: 'one-api'
+
+    - name: Get latest version number from one-api using GitHub API
+      id: get_one_api_version
+      run: |
+        version=$(curl -s "https://api.github.com/repos/MartialBE/one-api/releases/latest" | jq -r '.tag_name')
+        echo "Latest version of one-api is $version"
+        echo "::set-output name=version::$version"
+
+    - name: Checkout current repository
+      uses: actions/checkout@v2
+      with:
+        path: 'current-repo'
+        repository: ${{ github.repository }} # 使用当前仓库名
+
+    - name: Get current repository version number
+      id: get_current_version
+      run: |
+        version=$(<current-repo/VERSION)
+        echo "Current repository version is $version"
+        echo "::set-output name=version::$version"
+
+    - name: Compare versions
+      id: compare_versions
+      run: |
+        if [ "${{ steps.get_one_api_version.outputs.version }}" != "${{ steps.get_current_version.outputs.version }}" ]; then
+          echo "Version numbers are different."
+          echo "::set-output name=should_build::true"
+        else
+          echo "Version numbers are the same."
+          echo "::set-output name=should_build::false"
+        fi
+
+    - name: Set up Go
+      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
+      uses: actions/setup-go@v2
+      with:
+        go-version: '^1.15' # 根据项目需求设置Go版本
+
+    - name: Build for different platforms
+      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
+      run: |
+        for os in windows linux freebsd; do
+          for arch in 386 amd64 arm arm64; do
+            echo "Building for $os-$arch"
+            GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch-${{ steps.get_one_api_version.outputs.version }}" github.com/MartialBE/one-api
+          done
+        done
+
+    - name: Create GitHub Release
+      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.get_one_api_version.outputs.version }}
+        release_name: Release ${{ steps.get_one_api_version.outputs.version }}
+        body: |
+          Release notes for ${{ steps.get_one_api_version.outputs.version }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: one-api-*-${{ steps.get_one_api_version.outputs.version }}
+        asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_one_api_version.outputs.version }}
+        asset_content_type: application/octet-stream
