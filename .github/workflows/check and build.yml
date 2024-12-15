@@ -1,89 +1,135 @@
-name: Daily Build and Deploy
+name: Build One-Hub
 
 on:
   schedule:
-    - cron: '0 0 * * *' # 每天午夜（UTC时间）执行
-  workflow_dispatch:
+    - cron: '0 0 * * *' # 每天 00:00 UTC 运行
+  workflow_dispatch: # 手动触发 workflow
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [x64, x86, arm64, arm]
+        include:
+          - os: windows-latest
+            arch: x64
+            artifact_name: one-hub-windows-amd64.zip
+          - os: windows-latest
+            arch: x86
+            artifact_name: one-hub-windows-386.zip
+          - os: ubuntu-latest
+            arch: x64
+            artifact_name: one-hub-linux-amd64.tar.gz
+          - os: ubuntu-latest
+            arch: x86
+            artifact_name: one-hub-linux-i686.tar.gz
+          - os: ubuntu-latest
+            arch: arm64
+            artifact_name: one-hub-linux-arm64.tar.gz
+          - os: ubuntu-latest
+            arch: arm
+            artifact_name: one-hub-linux-armv7l.tar.gz
+          - os: macos-latest
+            arch: arm64
+            artifact_name: one-hub-darwin-arm64.tar.gz
+          - os: macos-latest
+            arch: x64
+            artifact_name: one-hub-darwin-amd64.tar.gz
+          - os: ubuntu-latest # FreeBSD构建也使用ubuntu runner
+            arch: x64       # FreeBSD通常使用amd64
+            target_os: freebsd
+            artifact_name: one-hub-freebsd-amd64.tar.gz
+
     steps:
-    - name: Get tags from one-api repository
-      id: get_tags_one_api
-      uses: MightyCode/gh-action-get-tags@v2.0
-      with:
-        repository: 'MartialBE/one-api'
+      - name: Checkout MartialBE/one-hub
+        uses: actions/checkout@v3
+        with:
+          repository: MartialBE/one-hub
+          ref: main # 或指定分支/标签
+          fetch-depth: 0
 
-    - name: Get the latest tag from one-api
-      id: get_latest_tag_one_api
-      run: |
-        echo "Tags from one-api: ${{ steps.get_tags_one_api.outputs.tags }}"
-        latest_tag=$(echo "${{ steps.get_tags_one_api.outputs.tags }}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
-        echo "Latest tag from one-api is $latest_tag"
-        echo "::set-output name=version::$latest_tag"
+      - name: Get Latest Tag
+        id: get_latest_tag
+        run: |
+          latest_tag=$(git describe --tags --abbrev=0 || echo "0")
+          echo "::set-output name=tag::$latest_tag"
 
-    - name: Get tags from current repository
-      id: get_tags_current
-      uses: MightyCode/gh-action-get-tags@v2.0
-      with:
-        repository: ${{ github.repository }}
+      - name: Checkout maohais/build-one-hub
+        uses: actions/checkout@v3
+        with:
+          path: build-repo
 
-    - name: Get the latest tag from current repository
-      id: get_latest_tag_current
-      run: |
-        echo "Tags from current repository: ${{ steps.get_tags_current.outputs.tags }}"
-        latest_tag=$(echo "${{ steps.get_tags_current.outputs.tags }}" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
-        echo "Latest tag from current repository is $latest_tag"
-        echo "::set-output name=version::$latest_tag"
+      - name: Get Previous Release Tag
+        id: get_previous_tag
+        run: |
+          cd build-repo
+          previous_tag=$(git describe --tags --abbrev=0 || echo "0")
+          echo "::set-output name=tag::$previous_tag"
+          cd ..
 
-    - name: Compare versions
-      id: compare_versions
-      run: |
-        if [ "${{ steps.get_latest_tag_one_api.outputs.version }}" != "${{ steps.get_latest_tag_current.outputs.version }}" ]; then
-          echo "Version numbers are different."
-          echo "::set-output name=should_build::true"
-        else
-          echo "Version numbers are the same."
-          echo "::set-output name=should_build::false"
-        fi
+      - name: Check if build is needed
+        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        run: echo "Need to build" || exit 1
 
-    - name: Set up Go
-      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
-      uses: actions/setup-go@v2
-      with:
-        go-version: '^1.15' # 根据项目需求设置Go版本
+      - name: Set up build environment
+        if: matrix.os == 'ubuntu-latest' and matrix.target_os != 'freebsd'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
 
-    - name: Build for different platforms
-      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
-      run: |
-        for os in windows linux freebsd; do
-          for arch in 386 amd64 arm arm64; do
-            echo "Building for $os-$arch"
-            GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch-${{ steps.get_latest_tag_one_api.outputs.version }}" github.com/MartialBE/one-api
-          done
-        done
+      - name: Build (FreeBSD)
+        if: matrix.target_os == 'freebsd'
+        run: |
+          docker run --rm -v "$(pwd):/app" freebsd:latest sh -c "pkg update -f && pkg install -y make gcc tar gzip && cd /app && make" #注意pkg源速度
 
-    - name: Create GitHub Release
-      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.get_latest_tag_one_api.outputs.version }}
-        release_name: Release ${{ steps.get_latest_tag_one_api.outputs.version }}
-        body: |
-          Release notes for ${{ steps.get_latest_tag_one_api.outputs.version }}
-        draft: false
-        prerelease: false
+      - name: Build (Other OS)
+        if: matrix.target_os != 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            echo "windows build is not supported yet" # 待实现
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            make
+          else
+            make
+          fi
 
-    - name: Upload Release Asset
-      if: ${{ steps.compare_versions.outputs.should_build == 'true' }}
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: one-api-*-${{ steps.get_latest_tag_one_api.outputs.version }}
-        asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}-${{ steps.get_latest_tag_one_api.outputs.version }}
-        asset_content_type: application/octet-stream
+      - name: Create Release Artifact (FreeBSD)
+        if: matrix.target_os == 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        run: |
+          tar czf ${{ matrix.artifact_name }} one-api
+
+      - name: Create Release Artifact (Other OS)
+        if: matrix.target_os != 'freebsd' and steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            echo "windows build is not supported yet" # 待实现
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+              tar czf ${{ matrix.artifact_name }} one-api
+          else
+            tar czf ${{ matrix.artifact_name }} one-api
+          fi
+
+      - name: Create Release
+        uses: actions/create-release@v1
+        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_latest_tag.outputs.tag }}
+          release_name: Release ${{ steps.get_latest_tag.outputs.tag }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Artifact
+        uses: actions/upload-release-asset@v1
+        if: steps.get_latest_tag.outputs.tag != steps.get_previous_tag.outputs.tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./${{ matrix.artifact_name }}
+          asset_name: ${{ matrix.artifact_name }}
+          asset_content_type: application/octet-stream
