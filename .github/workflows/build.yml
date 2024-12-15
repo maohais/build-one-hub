@@ -1,6 +1,8 @@
 name: Daily Build and Release
 
 on:
+  schedule:
+    - cron: '0 0 * * *' # 每天午夜（UTC时间）执行
   workflow_dispatch:
 
 jobs:
@@ -31,7 +33,7 @@ jobs:
       id: create_release
       uses: actions/create-release@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.TOKEN }} # 使用您设置的PAT
       with:
         tag_name: ${{ github.ref }}
         release_name: Release ${{ github.ref }}
@@ -43,7 +45,7 @@ jobs:
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
       env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.TOKEN }} # 使用您设置的PAT
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: one-api/one-api-${{ matrix.goos }}-${{ matrix.goarch }}
