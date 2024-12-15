@@ -1,0 +1,53 @@
+name: Daily Build and Release
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天午夜（UTC时间）执行
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout one-api repository
+      uses: actions/checkout@v2
+      with:
+        repository: 'MartialBE/one-api'
+        path: 'one-api'
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '^1.15' # 根据项目需求设置Go版本
+
+    - name: Build for different platforms
+      run: |
+        for os in windows linux freebsd; do
+          for arch in 386 amd64 arm arm64; do
+            echo "Building for $os-$arch"
+            GOOS=$os GOARCH=$arch go build -o "one-api-$os-$arch" github.com/MartialBE/one-api
+          done
+        done
+
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          Release notes for ${{ github.ref }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: one-api-*.exe
+        asset_name: one-api-${{ matrix.os }}-${{ matrix.arch }}
+        asset_content_type: application/octet-stream
