@@ -8,26 +8,33 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [windows, linux, freebsd]
-        goarch: [386, amd64, arm, arm64]
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
       with:
         repository: 'MartialBE/one-api'
-        path: 'one-api'
+        fetch-depth: 0 # 获取所有tags
+
+    - name: Get latest tag
+      id: get_latest_tag
+      run: |
+        latest_tag=$(git describe --tags `git rev-list --tags --max-count=1`)
+        echo "Latest tag is $latest_tag"
+        echo "::set-output name=tag::$latest_tag"
 
     - name: Set up Go
       uses: actions/setup-go@v2
       with:
         go-version: '^1.15' # 根据项目需求设置Go版本
 
-    - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+    - name: Build for different platforms
       run: |
-        cd one-api
-        GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} make
+        for os in windows linux freebsd; do
+          for arch in 386 amd64 arm arm64; do
+            echo "Building for $os-$arch"
+            GOOS=$os GOARCH=$arch go build -ldflags "-s -w -X 'main.version=${{ steps.get_latest_tag.outputs.tag }}'" -o "one-api-$os-$arch-${{ steps.get_latest_tag.outputs.tag }}" github.com/MartialBE/one-api
+          done
+        done
 
     - name: Create GitHub Release
       id: create_release
@@ -35,10 +42,10 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.TOKEN }} # 使用您设置的PAT
       with:
-        tag_name: ${{ github.sha }} # 使用当前提交的SHA作为标签名
-        release_name: Release ${{ github.sha }}
+        tag_name: ${{ steps.get_latest_tag.outputs.tag }} # 使用最新的tag作为版本号
+        release_name: Release ${{ steps.get_latest_tag.outputs.tag }}
         body: |
-          Release notes for ${{ github.sha }}
+          Release notes for ${{ steps.get_latest_tag.outputs.tag }}
         draft: false
         prerelease: false
 
@@ -48,6 +55,6 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.TOKEN }} # 使用您设置的PAT
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: one-api/one-api-${{ matrix.goos }}-${{ matrix.goarch }}
-        asset_name: one-api-${{ github.sha }}-${{ matrix.goos }}-${{ matrix.goarch }}
+        asset_path: one-api-*-${{ steps.get_latest_tag.outputs.tag }}
+        asset_name: one-api-${{ steps.get_latest_tag.outputs.tag }}-${{ matrix.os }}-${{ matrix.arch }}
         asset_content_type: application/octet-stream
