@@ -9,30 +9,18 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout one-api repository
-      uses: actions/checkout@v2
-      with:
-        repository: 'MartialBE/one-api'
-        path: 'one-api'
-
-    - name: Get latest version number from one-api using GitHub API
+    - name: Get latest version number from one-api repository using GitHub API
       id: get_one_api_version
       run: |
         version=$(curl -s "https://api.github.com/repos/MartialBE/one-api/releases/latest" | jq -r '.tag_name')
         echo "Latest version of one-api is $version"
         echo "::set-output name=version::$version"
 
-    - name: Checkout current repository
-      uses: actions/checkout@v2
-      with:
-        path: 'current-repo'
-        repository: ${{ github.repository }} # 使用当前仓库名
-
-    - name: Get current repository version number
+    - name: Get latest version number from current repository using GitHub API
       id: get_current_version
       run: |
-        version=$(<current-repo/VERSION)
-        echo "Current repository version is $version"
+        version=$(curl -s "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" | jq -r '.tag_name')
+        echo "Latest version of current repository is $version"
         echo "::set-output name=version::$version"
 
     - name: Compare versions
